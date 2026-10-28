@@ -86,19 +86,44 @@ def parse_price(text):
 
 
 def extract_price(page, custom_selector=""):
+    # Affichage des informations générales de la page reçue
+    try:
+        page_url = page.url
+        page_title = page.title()
+        log.info("--- Analyse de la page ---")
+        log.info("URL actuelle : %s", page_url)
+        log.info("Titre de la page : %s", page_title)
+    except Exception as e:
+        log.warning("Impossible de récupérer l'URL ou le titre de la page : %s", e)
+
+    # 1. Test du sélecteur personnalisé
     if custom_selector:
         try:
+            log.info("Tentative avec le sélecteur personnalisé : %s", custom_selector)
             el = page.query_selector(custom_selector)
             if el:
-                price = parse_price(el.inner_text())
+                text = el.inner_text()
+                log.info("Élément trouvé pour le sélecteur personnalisé. Texte brut : '%s'", text.strip())
+                price = parse_price(text)
                 if price is not None:
+                    log.info("Prix extrait avec succès via le sélecteur personnalisé : %s", price)
                     return price
+                else:
+                    log.warning("Impossible de parser le prix à partir du texte : '%s'", text.strip())
+            else:
+                log.info("Aucun élément trouvé pour le sélecteur personnalisé : %s", custom_selector)
         except Exception as exc:
             log.warning("Sélecteur personnalisé inutilisable : %s", exc)
 
-    for script in page.query_selector_all('script[type="application/ld+json"]'):
+    # 2. Recherche dans les scripts JSON-LD
+    log.info("Recherche du prix dans les scripts JSON-LD...")
+    json_scripts = page.query_selector_all('script[type="application/ld+json"]')
+    log.info("Nombre de scripts JSON-LD trouvés dans la page : %d", len(json_scripts))
+    
+    for i, script in enumerate(json_scripts):
         try:
-            data = json.loads(script.inner_text())
+            script_text = script.inner_text()
+            data = json.loads(script_text)
             objects = data if isinstance(data, list) else [data]
             for obj in objects:
                 if not isinstance(obj, dict):
@@ -113,20 +138,33 @@ def extract_price(page, custom_selector=""):
                         offers = offers[0] if offers else None
                     if isinstance(offers, dict):
                         for key in ("price", "lowPrice"):
-                            price = parse_price(str(offers.get(key, "")))
-                            if price is not None:
-                                return price
+                            raw_val = offers.get(key)
+                            if raw_val is not None:
+                                price = parse_price(str(raw_val))
+                                if price is not None:
+                                    log.info("Prix trouvé via JSON-LD (script #%d, clé '%s') : %s", i, key, price)
+                                    return price
         except (ValueError, TypeError, AttributeError):
             continue
 
+    # 3. Recherche dans les balises meta OpenGraph / Product
+    log.info("Recherche du prix dans les balises meta...")
     meta = page.query_selector(
         'meta[property="product:price:amount"], meta[property="og:price:amount"]'
     )
     if meta:
-        price = parse_price(meta.get_attribute("content"))
+        prop = meta.get_attribute("property")
+        content = meta.get_attribute("content")
+        log.info("Balise meta trouvée (property='%s'). Contenu : '%s'", prop, content)
+        price = parse_price(content)
         if price is not None:
+            log.info("Prix extrait avec succès via la balise meta : %s", price)
             return price
+    else:
+        log.info("Aucune balise meta de prix trouvée.")
 
+    # 4. Recherche via les sélecteurs de secours (fallback)
+    log.info("Recherche du prix via les sélecteurs de secours...")
     for selector in (
         '[class*="price-default--current"]',
         '[class*="price--current"]',
@@ -134,15 +172,25 @@ def extract_price(page, custom_selector=""):
         '[class*="Price"] [class*="current"]',
     ):
         try:
-            for el in page.query_selector_all(selector):
-                price = parse_price(el.inner_text())
+            elements = page.query_selector_all(selector)
+            log.info("Sélecteur de secours '%s' : %d élément(s) trouvé(s)", selector, len(elements))
+            for el in elements:
+                text = el.inner_text()
+                log.info(" -> Test du texte de l'élément : '%s'", text.strip())
+                price = parse_price(text)
                 if price is not None:
+                    log.info("Prix extrait avec succès via le sélecteur '%s' : %s", selector, price)
                     return price
-        except Exception:
+        except Exception as exc:
+            log.debug("Erreur lors de l'évaluation du sélecteur '%s' : %s", selector, exc)
             continue
+
+    # Si vraiment rien n'est trouvé, vous pouvez décommenter la ligne suivante 
+    # pour inspecter une partie du HTML de la page dans vos logs :
+    # log.debug("HTML de la page (partiel) : %s", page.content()[:1000])
+
+    log.warning("Aucun prix n'a pu être extrait de la page par l'ensemble des méthodes.")
     return None
-
-
 def notify(title, message, url):
     if not NTFY_TOPIC:
         log.error("NTFY NON CONFIGURÉ | Ajoute le secret NTFY_TOPIC dans GitHub.")
