@@ -85,108 +85,346 @@ def parse_price(text):
         return None
 
 
-def extract_price(page, custom_selector=""):
-    # Affichage des informations générales de la page reçue
-    try:
-        page_url = page.url
-        page_title = page.title()
-        log.info("--- Analyse de la page ---")
-        log.info("URL actuelle : %s", page_url)
-        log.info("Titre de la page : %s", page_title)
-    except Exception as e:
-        log.warning("Impossible de récupérer l'URL ou le titre de la page : %s", e)
 
-    # 1. Test du sélecteur personnalisé
+def extract_price(page):
+    """Détecte le prix et journalise les sources pour diagnostiquer AliExpress."""
+    import json
+    import re
+
+    candidates = []
+
+    def add_candidate(source, raw_value, priority):
+        if raw_value is None:
+            return
+
+        raw_value = str(raw_value).strip()
+        if not raw_value:
+            return
+
+        price = parse_price(raw_value)
+        log.info(
+            "[PRIX CANDIDAT] source=%s | valeur=%r | prix_parsé=%r",
+            source,
+            raw_value[:500],
+            price,
+        )
+
+        if price is not None and price > 0:
+            candidates.append({
+                "source": source,
+                "raw": raw_value,
+                "price": price,
+                "priority": priority,
+            })
+
+    log.info("=" * 60)
+    log.info("--- DIAGNOSTIC COMPLET DE LA PAGE ---")
+
+    try:
+        log.info("URL actuelle : %s", page.url)
+        log.info("Titre de la page : %s", page.title())
+    except Exception as exc:
+        log.warning("Impossible de lire les informations de page : %s", exc)
+
+    # 1. Texte visible et détection d'une éventuelle page de contrôle
+    try:
+        body_text = page.locator("body").inner_text(timeout=5000)
+        log.info("Longueur du texte visible : %s caractères", len(body_text))
+        log.info("Début du texte visible : %r", body_text[:4000])
+
+        access_keywords = [
+            "captcha",
+            "verify you are human",
+            "security verification",
+            "unusual traffic",
+            "access denied",
+            "robot check",
+        ]
+
+        found_keywords = [
+            word for word in access_keywords
+            if word in body_text.lower()
+        ]
+
+        if found_keywords:
+            log.warning(
+                "Mots-clés de contrôle d'accès détectés : %s",
+                found_keywords,
+            )
+    except Exception as exc:
+        log.warning("Lecture du texte visible impossible : %s", exc)
+
+    # 2. Sélecteur personnalisé, s'il existe dans la configuration
+    custom_selector = globals().get("CUSTOM_PRICE_SELECTOR", "")
+
     if custom_selector:
+        log.info("Sélecteur personnalisé configuré : %r", custom_selector)
+
         try:
-            log.info("Tentative avec le sélecteur personnalisé : %s", custom_selector)
-            el = page.query_selector(custom_selector)
-            if el:
-                text = el.inner_text()
-                log.info("Élément trouvé pour le sélecteur personnalisé. Texte brut : '%s'", text.strip())
-                price = parse_price(text)
-                if price is not None:
-                    log.info("Prix extrait avec succès via le sélecteur personnalisé : %s", price)
-                    return price
-                else:
-                    log.warning("Impossible de parser le prix à partir du texte : '%s'", text.strip())
-            else:
-                log.info("Aucun élément trouvé pour le sélecteur personnalisé : %s", custom_selector)
+            elements = page.locator(custom_selector)
+            count = elements.count()
+            log.info("Éléments trouvés avec le sélecteur personnalisé : %s", count)
+
+            for i in range(min(count, 20)):
+                element = elements.nth(i)
+                try:
+                    log.info(
+                        "[CUSTOM #%s] visible=%s | texte=%r | HTML=%s",
+                        i,
+                        element.is_visible(),
+                        element.inner_text(timeout=1500)[:300],
+                        element.evaluate("(e) => e.outerHTML")[:700],
+                    )
+                    if element.is_visible():
+                        add_candidate(
+                            f"custom_selector_{i}",
+                            element.inner_text(timeout=1500),
+                            100,
+                        )
+                except Exception as exc:
+                    log.debug("Lecture élément personnalisé #%s : %s", i, exc)
         except Exception as exc:
             log.warning("Sélecteur personnalisé inutilisable : %s", exc)
-
-    # 2. Recherche dans les scripts JSON-LD
-    log.info("Recherche du prix dans les scripts JSON-LD...")
-    json_scripts = page.query_selector_all('script[type="application/ld+json"]')
-    log.info("Nombre de scripts JSON-LD trouvés dans la page : %d", len(json_scripts))
-    
-    for i, script in enumerate(json_scripts):
-        try:
-            script_text = script.inner_text()
-            data = json.loads(script_text)
-            objects = data if isinstance(data, list) else [data]
-            for obj in objects:
-                if not isinstance(obj, dict):
-                    continue
-                candidates = [obj]
-                graph = obj.get("@graph", [])
-                if isinstance(graph, list):
-                    candidates.extend(x for x in graph if isinstance(x, dict))
-                for candidate in candidates:
-                    offers = candidate.get("offers")
-                    if isinstance(offers, list):
-                        offers = offers[0] if offers else None
-                    if isinstance(offers, dict):
-                        for key in ("price", "lowPrice"):
-                            raw_val = offers.get(key)
-                            if raw_val is not None:
-                                price = parse_price(str(raw_val))
-                                if price is not None:
-                                    log.info("Prix trouvé via JSON-LD (script #%d, clé '%s') : %s", i, key, price)
-                                    return price
-        except (ValueError, TypeError, AttributeError):
-            continue
-
-    # 3. Recherche dans les balises meta OpenGraph / Product
-    log.info("Recherche du prix dans les balises meta...")
-    meta = page.query_selector(
-        'meta[property="product:price:amount"], meta[property="og:price:amount"]'
-    )
-    if meta:
-        prop = meta.get_attribute("property")
-        content = meta.get_attribute("content")
-        log.info("Balise meta trouvée (property='%s'). Contenu : '%s'", prop, content)
-        price = parse_price(content)
-        if price is not None:
-            log.info("Prix extrait avec succès via la balise meta : %s", price)
-            return price
     else:
-        log.info("Aucune balise meta de prix trouvée.")
+        log.info("Aucun sélecteur personnalisé configuré.")
 
-    # 4. Recherche via les sélecteurs de secours (fallback)
-    log.info("Recherche du prix via les sélecteurs de secours...")
-    for selector in (
+    # 3. JSON-LD : collecter les prix sans retourner prématurément
+    scripts = page.locator('script[type="application/ld+json"]')
+    try:
+        script_count = scripts.count()
+    except Exception:
+        script_count = 0
+
+    log.info("Nombre de scripts JSON-LD : %s", script_count)
+
+    def inspect_json(data, location):
+        if isinstance(data, list):
+            for index, item in enumerate(data):
+                inspect_json(item, f"{location}[{index}]")
+            return
+
+        if not isinstance(data, dict):
+            return
+
+        log.debug(
+            "Objet JSON-LD %s : %s",
+            location,
+            json.dumps(data, ensure_ascii=False)[:3000],
+        )
+
+        offers = data.get("offers")
+
+        if isinstance(offers, dict):
+            offers = [offers]
+
+        if isinstance(offers, list):
+            for offer_index, offer in enumerate(offers):
+                if not isinstance(offer, dict):
+                    continue
+
+                log.info(
+                    "[JSON-LD OFFER] %s | devise=%r | price=%r | "
+                    "lowPrice=%r | highPrice=%r | availability=%r",
+                    location,
+                    offer.get("priceCurrency"),
+                    offer.get("price"),
+                    offer.get("lowPrice"),
+                    offer.get("highPrice"),
+                    offer.get("availability"),
+                )
+
+                for key in ("price", "lowPrice", "highPrice"):
+                    value = offer.get(key)
+                    if value is not None:
+                        add_candidate(
+                            f"jsonld_{location}_offer{offer_index}_{key}",
+                            value,
+                            10 if key == "price" else 5,
+                        )
+
+        # Certaines pages placent les offres dans @graph.
+        graph = data.get("@graph")
+        if graph is not None:
+            inspect_json(graph, f"{location}.@graph")
+
+    for i in range(script_count):
+        try:
+            raw_json = scripts.nth(i).inner_text(timeout=3000)
+            log.info(
+                "JSON-LD script #%s | longueur=%s",
+                i,
+                len(raw_json),
+            )
+            log.info(
+                "JSON-LD script #%s complet (limité à 12000 caractères) : %s",
+                i,
+                raw_json[:12000],
+            )
+
+            data = json.loads(raw_json)
+            inspect_json(data, f"script{i}")
+        except Exception as exc:
+            log.warning("JSON-LD #%s illisible : %s", i, exc)
+
+    # 4. Métadonnées de prix
+    meta_selectors = [
+        'meta[property="product:price:amount"]',
+        'meta[property="og:price:amount"]',
+        'meta[property="product:price:currency"]',
+        'meta[property="og:price:currency"]',
+        'meta[itemprop="price"]',
+        'meta[name="price"]',
+    ]
+
+    for selector in meta_selectors:
+        try:
+            elements = page.locator(selector)
+            count = elements.count()
+
+            for i in range(min(count, 10)):
+                element = elements.nth(i)
+                content = element.get_attribute("content")
+                log.info(
+                    "[META] sélecteur=%s | content=%r",
+                    selector,
+                    content,
+                )
+
+                if "currency" not in selector:
+                    add_candidate(f"meta_{selector}_{i}", content, 20)
+        except Exception as exc:
+            log.debug("Lecture métadonnée %s : %s", selector, exc)
+
+    # 5. Éléments DOM susceptibles de contenir le prix
+    price_selectors = [
         '[class*="price-default--current"]',
         '[class*="price--current"]',
         '[class*="es--wrap"]',
         '[class*="Price"] [class*="current"]',
-    ):
-        try:
-            elements = page.query_selector_all(selector)
-            log.info("Sélecteur de secours '%s' : %d élément(s) trouvé(s)", selector, len(elements))
-            for el in elements:
-                text = el.inner_text()
-                log.info(" -> Test du texte de l'élément : '%s'", text.strip())
-                price = parse_price(text)
-                if price is not None:
-                    log.info("Prix extrait avec succès via le sélecteur '%s' : %s", selector, price)
-                    return price
-        except Exception as exc:
-            log.debug("Erreur lors de l'évaluation du sélecteur '%s' : %s", selector, exc)
-            continue
+        '[class*="price"]',
+        '[class*="Price"]',
+        '[class*="amount"]',
+        '[class*="sale"]',
+        '[data-spm*="price"]',
+        '[itemprop="price"]',
+    ]
 
-    log.warning("Aucun prix n'a pu être extrait de la page par l'ensemble des méthodes.")
-    return None
+    seen = set()
+
+    for selector in price_selectors:
+        try:
+            elements = page.locator(selector)
+            count = elements.count()
+            log.info("[DOM] sélecteur=%s | nombre=%s", selector, count)
+
+            for i in range(min(count, 40)):
+                element = elements.nth(i)
+
+                try:
+                    visible = element.is_visible()
+                    text_value = element.inner_text(timeout=1000).strip()
+                    html = element.evaluate("(e) => e.outerHTML")
+
+                    # Éviter de journaliser plusieurs fois le même élément.
+                    signature = (selector, html[:250])
+                    if signature in seen:
+                        continue
+                    seen.add(signature)
+
+                    log.info(
+                        "[DOM CANDIDAT] sélecteur=%s | index=%s | "
+                        "visible=%s | texte=%r | HTML=%s",
+                        selector,
+                        i,
+                        visible,
+                        text_value[:300],
+                        html[:800],
+                    )
+
+                    if visible and text_value:
+                        add_candidate(
+                            f"dom_{selector}_{i}",
+                            text_value,
+                            80,
+                        )
+
+                    # L'attribut content peut porter un prix non visible.
+                    content = element.get_attribute("content")
+                    if content and not text_value:
+                        add_candidate(
+                            f"dom_content_{selector}_{i}",
+                            content,
+                            30,
+                        )
+
+                except Exception as exc:
+                    log.debug(
+                        "Erreur lecture DOM %s #%s : %s",
+                        selector,
+                        i,
+                        exc,
+                    )
+        except Exception as exc:
+            log.debug("Sélecteur DOM %s ignoré : %s", selector, exc)
+
+    # 6. Lignes du texte visible qui ressemblent à des prix
+    try:
+        for line_number, line in enumerate(body_text.splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+
+            if re.search(
+                r"(€|EUR|US\$|\$|£|price|prix|sale|promotion)",
+                line,
+                re.IGNORECASE,
+            ):
+                log.info(
+                    "[LIGNE PRIX] ligne=%s | texte=%r",
+                    line_number,
+                    line[:500],
+                )
+    except Exception as exc:
+        log.debug("Analyse des lignes visibles impossible : %s", exc)
+
+    # 7. Résumé des candidats
+    log.info("--- RÉSUMÉ DES PRIX CANDIDATS ---")
+
+    for candidate in candidates:
+        log.info(
+            "source=%s | prix=%s | priorité=%s | texte=%r",
+            candidate["source"],
+            candidate["price"],
+            candidate["priority"],
+            candidate["raw"][:200],
+        )
+
+    if not candidates:
+        log.error("AUCUN PRIX TROUVÉ dans les sources analysées.")
+        return None
+
+    # Priorité au prix d'un élément DOM visible, puis au sélecteur
+    # personnalisé, aux métadonnées et enfin au JSON-LD.
+    dom_candidates = [
+        c for c in candidates if c["source"].startswith("dom_")
+    ]
+
+    if dom_candidates:
+        # Ne choisir que les éléments dont le texte contient un prix.
+        # On ne peut pas garantir automatiquement qu'il s'agit de la
+        # variante sélectionnée : les logs permettent de le vérifier.
+        selected = dom_candidates[0]
+    else:
+        selected = max(candidates, key=lambda c: c["priority"])
+
+    log.info(
+        "PRIX RETENU : %s | source=%s | texte=%r",
+        selected["price"],
+        selected["source"],
+        selected["raw"][:300],
+    )
+
+    return selected["price"]
 
 
 def notify(title, message, url):
