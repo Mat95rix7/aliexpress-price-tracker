@@ -43,6 +43,35 @@ logging.basicConfig(
 )
 log = logging.getLogger("price_tracker")
 
+def test_original_url(url):
+    log.info("=== TEST HTTP SANS SUIVRE LES REDIRECTIONS ===")
+    log.info("URL demandée : %s", url)
+
+    try:
+        response = requests.get(
+            url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/131.0.0.0 Safari/537.36"
+                ),
+                "Accept-Language": "fr-FR,fr;q=0.9",
+            },
+            allow_redirects=False,
+            timeout=20,
+        )
+
+        log.info("Statut HTTP : %s", response.status_code)
+        log.info("URL de la réponse : %s", response.url)
+        log.info(
+            "En-tête Location : %s",
+            response.headers.get("Location", "(aucune redirection)"),
+        )
+
+    except requests.RequestException as exc:
+        log.error("ÉCHEC DU TEST HTTP | %s", exc)
+
 
 def load_json(path, default):
     if not path.exists():
@@ -522,6 +551,7 @@ def main():
                 log.info("=" * 65)
 
                 try:
+                    test_original_url(original_url)
                     response = page.goto(
                         original_url,
                         wait_until="domcontentloaded",
