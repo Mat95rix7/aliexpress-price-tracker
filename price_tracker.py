@@ -185,12 +185,10 @@ def extract_price(page, custom_selector=""):
             log.debug("Erreur lors de l'évaluation du sélecteur '%s' : %s", selector, exc)
             continue
 
-    # Si vraiment rien n'est trouvé, vous pouvez décommenter la ligne suivante 
-    # pour inspecter une partie du HTML de la page dans vos logs :
-    # log.debug("HTML de la page (partiel) : %s", page.content()[:1000])
-
     log.warning("Aucun prix n'a pu être extrait de la page par l'ensemble des méthodes.")
     return None
+
+
 def notify(title, message, url):
     if not NTFY_TOPIC:
         log.error("NTFY NON CONFIGURÉ | Ajoute le secret NTFY_TOPIC dans GitHub.")
@@ -253,7 +251,13 @@ def main():
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
         try:
-            context = browser.new_context(locale=LOCALE)
+            context = browser.new_context(
+                locale=LOCALE,
+                timezone_id="Europe/Paris",
+                geolocation={"latitude": 48.8566, "longitude": 2.3522},
+                permissions=["geolocation"],
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            )
             page = context.new_page()
             page.set_default_timeout(10000)
 
