@@ -91,9 +91,9 @@ def extract_price(page):
     """Essaie plusieurs sources de prix sur la page."""
 
     # 1. Sélecteur personnalisé défini dans la configuration
-    if CUSTOM_PRICE_SELECTOR:
+    if globals().get("CUSTOM_PRICE_SELECTOR", ""):
         try:
-            element = page.query_selector(CUSTOM_PRICE_SELECTOR)
+            element = page.query_selector(globals().get("CUSTOM_PRICE_SELECTOR", ""))
             if element:
                 price = parse_price(element.inner_text())
                 if price is not None:
