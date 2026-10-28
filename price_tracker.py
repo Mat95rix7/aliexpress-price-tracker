@@ -86,9 +86,11 @@ def parse_price(text):
 
 
 
+
 def extract_price(page):
     """Essaie plusieurs sources de prix sur la page."""
 
+    # 1. Sélecteur personnalisé défini dans la configuration
     if CUSTOM_PRICE_SELECTOR:
         try:
             element = page.query_selector(CUSTOM_PRICE_SELECTOR)
@@ -97,9 +99,11 @@ def extract_price(page):
                 if price is not None:
                     return price
         except Exception as exc:
-            log.warning("Sélecteur personnalisé inutilisable : %s", exc)
+            log.warning(
+                "Sélecteur personnalisé inutilisable : %s", exc
+            )
 
-    # JSON-LD
+    # 2. JSON-LD
     for script in page.query_selector_all(
         'script[type="application/ld+json"]'
     ):
@@ -113,35 +117,42 @@ def extract_price(page):
 
                 candidates = [obj]
                 graph = obj.get("@graph", [])
+
                 if isinstance(graph, list):
                     candidates.extend(
-                        item for item in graph if isinstance(item, dict)
+                        item for item in graph
+                        if isinstance(item, dict)
                     )
 
                 for candidate in candidates:
                     offers = candidate.get("offers")
+
                     if isinstance(offers, list):
                         offers = offers[0] if offers else None
 
                     if isinstance(offers, dict):
                         for key in ("price", "lowPrice"):
-                            price = parse_price(str(offers.get(key, "")))
+                            price = parse_price(
+                                str(offers.get(key, ""))
+                            )
                             if price is not None:
                                 return price
+
         except (ValueError, TypeError, AttributeError):
             continue
 
-    # Métadonnées
+    # 3. Métadonnées
     meta = page.query_selector(
         'meta[property="product:price:amount"], '
         'meta[property="og:price:amount"]'
     )
+
     if meta:
         price = parse_price(meta.get_attribute("content"))
         if price is not None:
             return price
 
-    # Sélecteurs courants, susceptibles de changer avec le site.
+    # 4. Sélecteurs courants AliExpress
     selectors = [
         '[class*="price-default--current"]',
         '[class*="price--current"]',
@@ -159,7 +170,6 @@ def extract_price(page):
             continue
 
     return None
-
 
 def notify(title, message, url):
     if not NTFY_TOPIC:
