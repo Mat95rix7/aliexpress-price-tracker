@@ -85,91 +85,63 @@ def parse_price(text):
         return None
 
 
-
-
-def extract_price(page):
-    """Essaie plusieurs sources de prix sur la page."""
-
-    # 1. Sélecteur personnalisé défini dans la configuration
-    if globals().get("CUSTOM_PRICE_SELECTOR", ""):
+def extract_price(page, custom_selector=""):
+    if custom_selector:
         try:
-            element = page.query_selector(globals().get("CUSTOM_PRICE_SELECTOR", ""))
-            if element:
-                price = parse_price(element.inner_text())
+            el = page.query_selector(custom_selector)
+            if el:
+                price = parse_price(el.inner_text())
                 if price is not None:
                     return price
         except Exception as exc:
-            log.warning(
-                "Sélecteur personnalisé inutilisable : %s", exc
-            )
+            log.warning("Sélecteur personnalisé inutilisable : %s", exc)
 
-    # 2. JSON-LD
-    for script in page.query_selector_all(
-        'script[type="application/ld+json"]'
-    ):
+    for script in page.query_selector_all('script[type="application/ld+json"]'):
         try:
             data = json.loads(script.inner_text())
             objects = data if isinstance(data, list) else [data]
-
             for obj in objects:
                 if not isinstance(obj, dict):
                     continue
-
                 candidates = [obj]
                 graph = obj.get("@graph", [])
-
                 if isinstance(graph, list):
-                    candidates.extend(
-                        item for item in graph
-                        if isinstance(item, dict)
-                    )
-
+                    candidates.extend(x for x in graph if isinstance(x, dict))
                 for candidate in candidates:
                     offers = candidate.get("offers")
-
                     if isinstance(offers, list):
                         offers = offers[0] if offers else None
-
                     if isinstance(offers, dict):
                         for key in ("price", "lowPrice"):
-                            price = parse_price(
-                                str(offers.get(key, ""))
-                            )
+                            price = parse_price(str(offers.get(key, "")))
                             if price is not None:
                                 return price
-
         except (ValueError, TypeError, AttributeError):
             continue
 
-    # 3. Métadonnées
     meta = page.query_selector(
-        'meta[property="product:price:amount"], '
-        'meta[property="og:price:amount"]'
+        'meta[property="product:price:amount"], meta[property="og:price:amount"]'
     )
-
     if meta:
         price = parse_price(meta.get_attribute("content"))
         if price is not None:
             return price
 
-    # 4. Sélecteurs courants AliExpress
-    selectors = [
+    for selector in (
         '[class*="price-default--current"]',
         '[class*="price--current"]',
         '[class*="es--wrap"]',
         '[class*="Price"] [class*="current"]',
-    ]
-
-    for selector in selectors:
+    ):
         try:
-            for element in page.query_selector_all(selector):
-                price = parse_price(element.inner_text())
+            for el in page.query_selector_all(selector):
+                price = parse_price(el.inner_text())
                 if price is not None:
                     return price
         except Exception:
             continue
-
     return None
+
 
 def notify(title, message, url):
     if not NTFY_TOPIC:
@@ -248,7 +220,7 @@ def main():
                         diagnose_page(page, name, status)
                         continue
                     page.wait_for_timeout(2500)
-                    price = extract_price(page)
+                    price = extract_price(page, custom_selector)
                     if price is None:
                         diagnose_page(page, name, status)
                         continue
