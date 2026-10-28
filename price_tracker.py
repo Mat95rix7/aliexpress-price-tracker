@@ -238,7 +238,7 @@ def main():
                         diagnose_page(page, name, status)
                         continue
                     page.wait_for_timeout(2500)
-                    price = extract_price(page, custom_selector)
+                    price = extract_price(page)
                     if price is None:
                         diagnose_page(page, name, status)
                         continue
