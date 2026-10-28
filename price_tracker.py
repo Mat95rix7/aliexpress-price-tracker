@@ -86,23 +86,20 @@ def parse_price(text):
 
 
 
-def extract_price(page, custom_selector=""):
-    """Recherche le prix et indique sa source pour le diagnostic."""
+def extract_price(page):
+    """Essaie plusieurs sources de prix sur la page."""
 
-    if custom_selector:
+    if CUSTOM_PRICE_SELECTOR:
         try:
-            el = page.query_selector(custom_selector)
-            if el:
-                text = el.inner_text().strip()
-                log.info("[DIAGNOSTIC] Sélecteur personnalisé : %r", text)
-                price = parse_price(text)
+            element = page.query_selector(CUSTOM_PRICE_SELECTOR)
+            if element:
+                price = parse_price(element.inner_text())
                 if price is not None:
-                    log.info("[DIAGNOSTIC] Prix retenu : %.2f €", price)
                     return price
         except Exception as exc:
             log.warning("Sélecteur personnalisé inutilisable : %s", exc)
 
-    # Affiche les prix présents dans les métadonnées JSON-LD.
+    # JSON-LD
     for script in page.query_selector_all(
         'script[type="application/ld+json"]'
     ):
@@ -118,7 +115,7 @@ def extract_price(page, custom_selector=""):
                 graph = obj.get("@graph", [])
                 if isinstance(graph, list):
                     candidates.extend(
-                        x for x in graph if isinstance(x, dict)
+                        item for item in graph if isinstance(item, dict)
                     )
 
                 for candidate in candidates:
@@ -128,55 +125,40 @@ def extract_price(page, custom_selector=""):
 
                     if isinstance(offers, dict):
                         for key in ("price", "lowPrice"):
-                            raw = offers.get(key)
-                            if raw is not None:
-                                log.info(
-                                    "[DIAGNOSTIC] JSON-LD %s : %r",
-                                    key, raw
-                                )
-                                price = parse_price(str(raw))
-                                if price is not None:
-                                    log.info(
-                                        "[DIAGNOSTIC] Prix retenu "
-                                        "depuis JSON-LD : %.2f €",
-                                        price
-                                    )
-                                    return price
+                            price = parse_price(str(offers.get(key, "")))
+                            if price is not None:
+                                return price
         except (ValueError, TypeError, AttributeError):
             continue
 
+    # Métadonnées
     meta = page.query_selector(
         'meta[property="product:price:amount"], '
         'meta[property="og:price:amount"]'
     )
     if meta:
-        raw = meta.get_attribute("content")
-        log.info("[DIAGNOSTIC] Métadonnée HTML : %r", raw)
-        price = parse_price(raw)
+        price = parse_price(meta.get_attribute("content"))
         if price is not None:
             return price
 
-    for selector in (
+    # Sélecteurs courants, susceptibles de changer avec le site.
+    selectors = [
         '[class*="price-default--current"]',
         '[class*="price--current"]',
         '[class*="es--wrap"]',
         '[class*="Price"] [class*="current"]',
-    ):
+    ]
+
+    for selector in selectors:
         try:
-            for el in page.query_selector_all(selector):
-                text = el.inner_text().strip()
-                log.info(
-                    "[DIAGNOSTIC] CSS %s : %r",
-                    selector, text[:200]
-                )
+            for element in page.query_selector_all(selector):
+                price = parse_price(element.inner_text())
+                if price is not None:
+                    return price
         except Exception:
             continue
 
-    log.warning(
-        "[DIAGNOSTIC] Prix non confirmé : aucune source exploitable."
-    )
     return None
-
 
 
 def notify(title, message, url):
