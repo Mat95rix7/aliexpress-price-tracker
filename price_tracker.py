@@ -85,45 +85,74 @@ def parse_price(text):
         return None
 
 
+
 def extract_price(page, custom_selector=""):
+    """Recherche le prix et indique sa source pour le diagnostic."""
+
     if custom_selector:
         try:
             el = page.query_selector(custom_selector)
             if el:
-                price = parse_price(el.inner_text())
+                text = el.inner_text().strip()
+                log.info("[DIAGNOSTIC] Sélecteur personnalisé : %r", text)
+                price = parse_price(text)
                 if price is not None:
+                    log.info("[DIAGNOSTIC] Prix retenu : %.2f €", price)
                     return price
         except Exception as exc:
             log.warning("Sélecteur personnalisé inutilisable : %s", exc)
 
-    for script in page.query_selector_all('script[type="application/ld+json"]'):
+    # Affiche les prix présents dans les métadonnées JSON-LD.
+    for script in page.query_selector_all(
+        'script[type="application/ld+json"]'
+    ):
         try:
             data = json.loads(script.inner_text())
             objects = data if isinstance(data, list) else [data]
+
             for obj in objects:
                 if not isinstance(obj, dict):
                     continue
+
                 candidates = [obj]
                 graph = obj.get("@graph", [])
                 if isinstance(graph, list):
-                    candidates.extend(x for x in graph if isinstance(x, dict))
+                    candidates.extend(
+                        x for x in graph if isinstance(x, dict)
+                    )
+
                 for candidate in candidates:
                     offers = candidate.get("offers")
                     if isinstance(offers, list):
                         offers = offers[0] if offers else None
+
                     if isinstance(offers, dict):
                         for key in ("price", "lowPrice"):
-                            price = parse_price(str(offers.get(key, "")))
-                            if price is not None:
-                                return price
+                            raw = offers.get(key)
+                            if raw is not None:
+                                log.info(
+                                    "[DIAGNOSTIC] JSON-LD %s : %r",
+                                    key, raw
+                                )
+                                price = parse_price(str(raw))
+                                if price is not None:
+                                    log.info(
+                                        "[DIAGNOSTIC] Prix retenu "
+                                        "depuis JSON-LD : %.2f €",
+                                        price
+                                    )
+                                    return price
         except (ValueError, TypeError, AttributeError):
             continue
 
     meta = page.query_selector(
-        'meta[property="product:price:amount"], meta[property="og:price:amount"]'
+        'meta[property="product:price:amount"], '
+        'meta[property="og:price:amount"]'
     )
     if meta:
-        price = parse_price(meta.get_attribute("content"))
+        raw = meta.get_attribute("content")
+        log.info("[DIAGNOSTIC] Métadonnée HTML : %r", raw)
+        price = parse_price(raw)
         if price is not None:
             return price
 
@@ -135,12 +164,19 @@ def extract_price(page, custom_selector=""):
     ):
         try:
             for el in page.query_selector_all(selector):
-                price = parse_price(el.inner_text())
-                if price is not None:
-                    return price
+                text = el.inner_text().strip()
+                log.info(
+                    "[DIAGNOSTIC] CSS %s : %r",
+                    selector, text[:200]
+                )
         except Exception:
             continue
+
+    log.warning(
+        "[DIAGNOSTIC] Prix non confirmé : aucune source exploitable."
+    )
     return None
+
 
 
 def notify(title, message, url):
