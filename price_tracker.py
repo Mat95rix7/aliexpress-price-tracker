@@ -220,34 +220,34 @@ def main():
                         diagnose_page(page, name, status)
                         continue
                     # Attendre le chargement des données dynamiques
-                page.wait_for_timeout(10000)
-                
-                # Réessayer la recherche du prix pendant 30 secondes maximum
-                price = None
-                
-                for attempt in range(6):
-                    price = extract_price(page, custom_selector)
-                
-                    if price is not None:
-                        log.info(
-                            "[%s] Prix trouvé à la tentative %d/6",
-                            name,
-                            attempt + 1
-                        )
-                        break
-                
-                    if attempt < 5:
-                        log.warning(
-                            "[%s] Prix introuvable, tentative %d/6. "
-                            "Nouvelle tentative dans 5 secondes.",
-                            name,
-                            attempt + 1
-                        )
-                        page.wait_for_timeout(5000)
-                
-                if price is None:
-                    diagnose_page(page, name, status)
-                    continue
+                    page.wait_for_timeout(10000)
+                    
+                    # Réessayer la recherche du prix pendant 30 secondes maximum
+                    price = None
+                    
+                    for attempt in range(6):
+                        price = extract_price(page, custom_selector)
+                    
+                        if price is not None:
+                            log.info(
+                                "[%s] Prix trouvé à la tentative %d/6",
+                                name,
+                                attempt + 1
+                            )
+                            break
+                    
+                        if attempt < 5:
+                            log.warning(
+                                "[%s] Prix introuvable, tentative %d/6. "
+                                "Nouvelle tentative dans 5 secondes.",
+                                name,
+                                attempt + 1
+                            )
+                            page.wait_for_timeout(5000)
+                    
+                    if price is None:
+                        diagnose_page(page, name, status)
+                        continue
                 except PlaywrightTimeoutError:
                     log.error("[%s] DÉLAI DÉPASSÉ | La page n'a pas chargé à temps.", name)
                     continue
